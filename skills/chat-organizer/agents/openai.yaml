@@ -1,0 +1,5 @@
+interface:
+  display_name: "聊天命名与项目归类助手"
+  short_description: "批量整理未处理聊天，改名并报告建议，确认后归类"
+  default_prompt: "用 $chat-organizer 整理20条未处理聊天，改名后逐条报告项目建议，等我确认再归类。"
+

@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+work/
+*.sqlite*
+*.db
+.env*
+*.local.json
+chat-organizer-data/
+reports/
+*.log
+.venv/
+
