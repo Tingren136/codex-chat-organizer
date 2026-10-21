@@ -13,6 +13,7 @@ import msvcrt
 from batch_cache import Cache, ROOT, encoded, fingerprint
 from desktop_mcp_probe import DesktopMcp
 from pipeline import initialize, analyze
+from naming_policy import load_policy
 from probe import Rpc
 from project_executor import call, inventory, restore_pin
 
@@ -101,9 +102,12 @@ def action(cache, client, run_id, tid, stage, tool, arguments):
     return response
 
 
-def run(run_id, ids=None, limit=2, naming_only=True, proposed_groups=None, prepared_snapshots=None):
+def run(run_id, ids=None, limit=2, naming_only=True, proposed_groups=None, prepared_snapshots=None, naming_policy=None):
     if not 1 <= limit <= 2 or (ids and len(ids) > 50):
         raise ValueError('This rollout is capped at two new chats')
+    if not naming_only:
+        raise ValueError('Automatic project moves are disabled; use reviewed session approvals')
+    policy = naming_policy or load_policy()
     cache = Cache(DB)
     setup(cache)
     previous = cache.db.execute('SELECT report FROM unified_runs WHERE id=?', (run_id,)).fetchone()
@@ -118,7 +122,7 @@ def run(run_id, ids=None, limit=2, naming_only=True, proposed_groups=None, prepa
             persist(cache, report, 'no_new_work')
             return report
         persist(cache, report, 'started')
-        client = DesktopMcp(allow_project_move=not naming_only, allow_pin_restore=not naming_only, allow_title=True)
+        client = DesktopMcp()
         initial = inventory(client, ids or ())
         protected = {k: t for k, t in initial.items() if k in excluded(cache)}
         projects = [p for p in call(client, 'list_projects', {})['projects']
@@ -150,6 +154,7 @@ def run(run_id, ids=None, limit=2, naming_only=True, proposed_groups=None, prepa
         for snap in snapshots.values():
             cache.ingest(snap)
         batch = cache.export(limit)
+        batch['naming_policy'] = policy
         batch['desktop'] = {'projects': [{'id': p['projectId'], 'name': p['label']} for p in projects],
                             'assignments': {t['id']: t.get('projectId') for t in selected}}
         if naming_only:
@@ -164,7 +169,7 @@ def run(run_id, ids=None, limit=2, naming_only=True, proposed_groups=None, prepa
         report['model_receipt'] = result
         if result.get('state') != 'completed':
             raise RuntimeError('Model did not complete; no automatic resend')
-        persist(cache, report, 'executing')
+        persist(cache, report, 'preparing_review')
         results = json.loads(Path(result['output']).read_text(encoding='utf-8'))['items']
         project_ids = {p['projectId'] for p in projects}
         for decision in results:
@@ -178,40 +183,10 @@ def run(run_id, ids=None, limit=2, naming_only=True, proposed_groups=None, prepa
                        'group_reason': decision.get('group_reason'),
                        'project_stage': 'awaiting_user_review' if naming_only else 'automatic'}
             report['items'].append(receipt)
-            if tid in {r[0] for r in cache.db.execute('SELECT thread FROM locks')}:
-                raise RuntimeError('Thread locked by another operation')
-            current = inventory(client, [tid]).get(tid)
-            if not current or current.get('status') == 'active' or any(
-                    current.get(k) != before.get(k) for k in ('title', 'projectId', 'cwd', 'pinnedIndex', 'updatedAt')):
-                raise RuntimeError('Concurrent desktop change; no writes')
-            fresh = read_snapshot(rpc, tid)
-            if fingerprint(fresh['messages']) != decision['hash']:
-                raise RuntimeError('Content changed; do not use stale decision')
-            with cache.db:
-                cache.db.execute('INSERT INTO locks VALUES(?,?)', (tid, '一键流程已分析并进入执行；禁止自动重试'))
-            if decision['title_action'] == 'review':
-                receipt['state'] = 'manual_review'
-                continue
-            target = decision['project_id']
-            if target and target not in project_ids:
-                raise ValueError('Project outside current desktop catalog')
-            if decision['title_action'] == 'rename' and decision['title'] != before['title']:
-                action(cache, client, run_id, tid, 'title', 'set_thread_title',
-                       {'threadId': tid, 'source': 'codex', 'title': decision['title']})
-            if not naming_only and target and target != before.get('projectId'):
-                action(cache, client, run_id, tid, 'project', 'move_thread_to_project',
-                       {'threadId': tid, 'hostId': 'local', 'source': 'codex', 'projectId': target})
-                restore_pin(cache.db, client, tid, before, initial)
-            after = inventory(client, [tid]).get(tid)
-            expected_title = decision['title'] if decision['title_action'] == 'rename' else before['title']
-            expected_project = before.get('projectId') if naming_only else (target or before.get('projectId'))
-            if not after or after['title'] != expected_title or after.get('projectId') != expected_project or any(
-                    after.get(k) != before.get(k) for k in ('cwd', 'pinnedIndex')):
-                raise RuntimeError('Desktop state verification failed; do not retry')
-            receipt.update(state='desktop_state_verified', after_title=after['title'],
-                           after_project=after.get('projectId'), after_updated_at=after.get('updatedAt'),
-                           after_cwd=after.get('cwd'), visual_verified=False)
-            persist(cache, report, 'executing')
+            receipt.update(state='awaiting_title_review', before=dict(before),
+                           content_hash=decision['hash'], title_action=decision['title_action'],
+                           naming_policy=policy)
+            persist(cache, report, 'preparing_review')
         final = inventory(client, list(protected))
         checks = {tid: bool(tid in final and all(old.get(k) == final[tid].get(k)
                   for k in ('title', 'projectId', 'cwd', 'pinnedIndex'))) for tid, old in protected.items()}

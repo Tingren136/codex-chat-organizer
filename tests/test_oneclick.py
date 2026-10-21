@@ -10,6 +10,7 @@ import oneclick as app
 
 class FakeClient:
     instances = 0
+    writes = 0
     def __init__(self, **kwargs):
         FakeClient.instances += 1
         self.threads = {i: {'id': i, 'title': i, 'kind': 'codex', 'hostId': 'local',
@@ -21,9 +22,11 @@ class FakeClient:
         elif name == 'list_threads':
             data = {'pinnedThreads': [], 'threads': list(self.threads.values())}
         elif name == 'set_thread_title':
+            FakeClient.writes += 1
             self.threads[args['threadId']]['title'] = args['title']
             data = {'ok': True}
         elif name == 'move_thread_to_project':
+            FakeClient.writes += 1
             self.threads[args['threadId']]['projectId'] = args['projectId']
             data = {'ok': True}
         else:
@@ -64,6 +67,7 @@ class FlowTests(unittest.TestCase):
                 output.write_text(encoded(batch), encoding='utf-8')
                 return {'state': 'completed', 'output': str(output)}
             FakeClient.instances = 0
+            FakeClient.writes = 0
             with patch.multiple(app, ROOT=root, DB=db, DesktopMcp=FakeClient,
                                 Rpc=FakeRpc, read_snapshot=snapshot, analyze=model):
                 result = app.run('test', ['old', 'new1', 'new2'])
@@ -74,6 +78,8 @@ class FlowTests(unittest.TestCase):
                 self.assertEqual(app.run('next', ['new1', 'new2'])['state'], 'no_new_work')
                 self.assertEqual(len(calls), 1)
                 self.assertEqual(FakeClient.instances, 1)
+                self.assertEqual(FakeClient.writes, 0)
+                self.assertTrue(all(r['state'] == 'awaiting_title_review' for r in result['items']))
 
 
 if __name__ == '__main__':

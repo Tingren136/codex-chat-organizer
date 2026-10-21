@@ -47,7 +47,7 @@ def main():
         doctor(); return
     if not args or args == ['--help']:
         print('chat-organizer ' + VERSION + '\n'
-              'doctor | scan --count 20 | report --session-id ID | apply --session-id ID --approval FILE\n'
+              'doctor | scan --count 20 | report --session-id ID | apply-titles --session-id ID --approval FILE | apply --session-id ID --approval FILE\n'
               'prepare-projects --session-id ID --approval FILE --roots FILE [--repair-confirmation TEXT]\n'
               'arm-repair --plan PATCH_PLAN | resume --plan PLAN | repair-status --plan PLAN\n'
               'Offline rollback: runtime/offline_registration.py rollback --plan PATCH_PLAN')

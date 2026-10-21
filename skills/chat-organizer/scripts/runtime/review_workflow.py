@@ -12,6 +12,8 @@ from oneclick import DB, excluded, select, run, setup
 from project_executor import call, inventory, restore_pin
 from probe import Rpc
 from settings import output_dir
+from naming_policy import load_policy
+from title_review import title_digest, title_draft, apply_titles
 
 WORK = ROOT / 'work' / 'review-sessions'
 
@@ -61,9 +63,11 @@ def outputs(session, projects):
         return str(text or '').replace('|', '／').replace('\n', ' ')
     lines = [f"# 聊天整理报告｜{session['id']}", '',
              f"请求 {session['requested']} 条；选中 {len(session['selected'])} 条；已输出 {len(rows(session))} 条。",
-             '标题已按逐条状态处理。项目建议尚未执行，等待用户确认。', '',
-             '|序号|聊天ID|原题 → 现题|内容摘要|建议分组|理由|状态|',
+             ('标题方案待确认，尚未改名；项目归类需另行确认。' if session['state'] in ('awaiting_title_review', 'analyzing') else '标题按逐条状态展示；未确认或未完成项继续等待，项目归类按独立批准执行。'), '',
+             '|序号|聊天ID|原题 → 建议题／执行后题|内容摘要|建议分组|理由|状态|',
              '|---|---|---|---|---|---|---|']
+    if session.get('naming_policy'):
+        lines.insert(4, '固定命名规则：' + session['naming_policy']['format'] + '；分隔符：' + session['naming_policy']['separator'] + '；最长' + str(session['naming_policy']['max_length']) + '字；规则版本' + str(session['naming_policy']['version']) + '。')
     decisions, groups = [], {}
     for n, item in enumerate(rows(session), 1):
         action = item.get('group_action') or 'review'
@@ -72,17 +76,17 @@ def outputs(session, projects):
         group = {'existing': names.get(pid, pid), 'new': '建议新建：' + (new_name or ''),
                  'misc': '杂聊／不强制归项目', 'keep': '保留现项目', 'review': '待判断'}.get(action)
         groups.setdefault(group or '待判断', []).append(n)
-        title = item.get('after_title') or item.get('before_title')
+        title = item.get('after_title') or item.get('suggested_title') or item.get('before_title')
         lines.append('|'+ '|'.join(map(clean, [n, item['thread'], (item.get('before_title') or '（原无标题）')+' → '+(title or '（无标题）'),
                      item.get('summary'), group, item.get('group_reason'), item['state']]))+'|')
         # Misc is a suggestion to leave alone unless the user explicitly chooses removal.
-        destination = pid if action == 'existing' else 'keep'
+        destination = pid if action == 'existing' else ('new:' + new_name if action == 'new' and new_name else 'keep')
         decisions.append({'thread': item['thread'], 'destination': destination,
                           'proposed_new_project': new_name if action == 'new' else None})
     lines.extend(['', '## 分组建议汇总', ''])
     for group, indices in groups.items():
         lines.append(f"- {group}：第{','.join(map(str, indices))}条。")
-    lines.extend(['', '新项目现在只建议；用户确认后用prepare-projects创建或复用已有项目。后端创建与桌面登记分开核验。',
+    lines.extend(['', '新项目现在只建议；用户确认后用apply自动准备目录、创建或复用项目并归类。后端创建与桌面登记分开核验。',
                   '现有项目归类、保留原项目或明确移为无项目，均按用户确认方案执行。'])
     text = '\n'.join(lines)
     (directory / '逐条报告.md').write_text(text, encoding='utf-8')
@@ -98,6 +102,10 @@ def outputs(session, projects):
     save(plan_path, plan)
     session['report_path'] = str(directory/'逐条报告.md')
     session['grouping_draft'] = str(plan_path)
+    if session.get('naming_policy'):
+        title_path = directory / '标题确认草案.json'
+        save(title_path, title_draft(session, rows(session)))
+        session['title_draft'] = str(title_path)
 
 
 def scan(count, sid=None):
@@ -109,8 +117,10 @@ def scan(count, sid=None):
         session = json.loads(path.read_text(encoding='utf-8'))
         if session['requested'] != count:
             raise ValueError('Session count cannot be changed')
-        if session['state'] == 'grouping_completed' or (session['state'] == 'awaiting_group_review' and len(session['selected']) >= count):
+        if session['state'] in ('awaiting_title_review', 'title_partial', 'awaiting_group_review', 'grouping_partial', 'grouping_completed'):
             return session
+        if 'naming_policy' not in session:
+            raise ValueError('Legacy interrupted session: inspect cached receipts; do not rerun analysis or titles')
         if len(session['selected']) < count:
             cache = Cache(DB)
             client = DesktopMcp()
@@ -130,12 +140,13 @@ def scan(count, sid=None):
             selected_ids = fill_candidates(cache, client, [t['id'] for t in chosen], count)
             session = {'id': sid, 'requested': count, 'selected': selected_ids,
                        'excluded_before': sorted(i for i in excluded(cache) if i),
-                       'batches': [], 'state': 'naming', 'projects': projects}
+                       'batches': [], 'state': 'analyzing', 'projects': projects, 'naming_policy': load_policy()}
             save(path, session)
         finally:
             cache.db.close()
             client.close()
-    session['state'] = 'naming'
+    session.setdefault('naming_policy', load_policy())
+    session['state'] = 'analyzing'
     covered = {tid for b in session['batches'] for tid in b['ids']}
     remaining = [tid for tid in session['selected'] if tid not in covered]
     chunks = [b['ids'] for b in session['batches']] + [remaining[i:i+2] for i in range(0,len(remaining),2)]
@@ -152,7 +163,7 @@ def scan(count, sid=None):
                 prepared = {tid: json.loads(Path(session['prepared_snapshots'][tid]).read_text(encoding='utf-8'))
                             for tid in ids if tid in session.get('prepared_snapshots', {})}
                 result = run(child['run'], ids, limit=2, naming_only=True, proposed_groups=proposals,
-                             prepared_snapshots=prepared)
+                             prepared_snapshots=prepared, naming_policy=session['naming_policy'])
                 if result.get('skipped_existing_run'):
                     result = result['stored_report']
                 child['result'] = result
@@ -164,7 +175,7 @@ def scan(count, sid=None):
                 save(path, session)
                 raise
             save(path, session)
-    session['state'] = 'awaiting_group_review'
+    session['state'] = 'awaiting_title_review'
     outputs(session, session['projects'])
     save(path, session)
     return session
@@ -272,6 +283,9 @@ def main():
     p.add_argument('--session-id')
     p = sub.add_parser('report')
     p.add_argument('--session-id', required=True)
+    p = sub.add_parser('apply-titles')
+    p.add_argument('--session-id', required=True)
+    p.add_argument('--approval', type=Path, required=True)
     p = sub.add_parser('apply')
     p.add_argument('--session-id', required=True)
     p.add_argument('--approval', type=Path, required=True)
@@ -285,14 +299,19 @@ def main():
         msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
         if args.command == 'scan':
             result = scan(args.count, args.session_id)
+        elif args.command == 'apply-titles':
+            result = apply_titles(args.session_id, args.approval, session_path, outputs, save, DB)
         elif args.command == 'apply':
-            result = apply_groups(args.session_id, args.approval)
+            from automatic_projects import apply
+            result = apply(args.session_id, args.approval)
         else:
             result = json.loads(session_path(args.session_id).read_text(encoding='utf-8'))
         print(encoded({'session': result['id'], 'state': result['state'],
                        'requested': result['requested'], 'selected': len(result['selected']),
                        'reported': len(rows(result)), 'report': result.get('report_path'),
+                       'title_draft': result.get('title_draft'),
                        'grouping_draft': result.get('grouping_draft'),
+                       'project_creation': result.get('project_creation'),
                        'group_receipts': result.get('group_receipts')}))
     finally:
         lock.close()
