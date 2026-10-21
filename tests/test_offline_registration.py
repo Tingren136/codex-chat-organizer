@@ -93,7 +93,7 @@ class RegistrationSafetyTests(unittest.TestCase):
             backup = root / 'backup'
             result = repair.write_patch(state, self.plan, backup, lambda: [])
             self.assertEqual((backup / 'before.json').read_bytes(), original)
-            self.assertEqual(json.loads(state.read_text()), result['after'])
+            self.assertEqual(json.loads(state.read_text(encoding='utf-8')), result['after'])
             again = repair.write_patch(state, self.plan, backup, lambda: [])
             self.assertEqual(again['state'], 'already_applied')
             self.assertEqual((backup / 'before.json').read_bytes(), original)
