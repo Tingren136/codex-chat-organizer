@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="340" viewBox="0 0 960 340">
+<rect width="960" height="340" rx="20" fill="#10232b"/>
+<g font-family="Microsoft YaHei, sans-serif">
+<text x="40" y="48" fill="#fff" font-size="25" font-weight="bold">从看不懂的聊天标题，到找得到的项目资料</text>
+<rect x="35" y="78" width="390" height="180" rx="12" fill="#263a43"/>
+<rect x="535" y="78" width="390" height="180" rx="12" fill="#22463f"/>
+<g fill="#c6d3d8" font-size="19"><text x="58" y="115">帮我看看这个怎么弄……</text><text x="58" y="155">继续上次那个问题</text><text x="58" y="195">这个再改一下，感觉不对</text><text x="58" y="235">先帮我写一下吧</text></g>
+<g fill="#e0f9ed" font-size="19"><text x="558" y="115">公众号｜选题与文章结构</text><text x="558" y="155">求职｜简历修改与面试准备</text><text x="558" y="195">网站｜首页布局调整</text><text x="558" y="235">周报｜工作总结与下周计划</text></g>
+<text x="453" y="180" fill="#72e6b2" font-size="42">→</text>
+<text x="40" y="298" fill="#72e6b2" font-size="20">先确认标题 → 自动改名 → 再确认分组 → 自动创建或复用项目</text>
+<text x="820" y="325" fill="#a0b8c0" font-size="12">虚构内容示意</text>
+</g></svg>

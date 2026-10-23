@@ -30,7 +30,11 @@ def session_path(sid):
 
 
 def rows(session):
-    return [item for child in session['batches'] for item in child.get('result', {}).get('items', [])]
+    result = [item for child in session['batches'] for item in child.get('result', {}).get('items', [])]
+    if session.get('selection_mode') == 'rename_count':
+        result = [r for r in result if r.get('title_action') == 'rename' and r.get('suggested_title')
+                  and r['suggested_title'] != r.get('before_title')]
+    return result
 
 
 def digest(session):
@@ -68,6 +72,12 @@ def outputs(session, projects):
              '|---|---|---|---|---|---|---|']
     if session.get('naming_policy'):
         lines.insert(4, '固定命名规则：' + session['naming_policy']['format'] + '；分隔符：' + session['naming_policy']['separator'] + '；最长' + str(session['naming_policy']['max_length']) + '字；规则版本' + str(session['naming_policy']['version']) + '。')
+    if session.get('selection_mode') == 'rename_count':
+        counts=session.get('selection_counts', {})
+        requested='全部范围' if session['all_mode'] else str(session['target'])+'条有效改名建议'
+        lines[2]=f"目标：{requested}；列表盘点 {session['catalog_listed']} 条；本次检查/复用 {counts.get('examined',0)} 条；找到 {len(rows(session))} 条改名建议。"
+        lines.insert(4, f"保留 {counts.get('keep',0)} 条；待判断 {counts.get('review',0)} 条；本次延后 {counts.get('deferred',0)} 条；此前待处理 {len(session.get('prior_deferred',[]))} 条；剩余未检查 {counts.get('remaining',0)} 条。新增模型批次 {session.get('new_model_calls',0)}。")
+        lines.insert(5, '停止原因：'+str(session.get('selection_stop'))+'。保留、待判断和延后项不占目标名额；有延后项不代表全部已整理。')
     decisions, groups = [], {}
     for n, item in enumerate(rows(session), 1):
         action = item.get('group_action') or 'review'
@@ -88,6 +98,14 @@ def outputs(session, projects):
         lines.append(f"- {group}：第{','.join(map(str, indices))}条。")
     lines.extend(['', '新项目现在只建议；用户确认后用apply自动准备目录、创建或复用项目并归类。后端创建与桌面登记分开核验。',
                   '现有项目归类、保留原项目或明确移为无项目，均按用户确认方案执行。'])
+    if session.get('selection_mode') == 'rename_count':
+        lines.extend(['','## 检查明细（保留项不占改名名额）','','|聊天ID|原标题|结论|复用旧分析|原因|','|---|---|---|---|---|'])
+        for e in session['examined']:
+            lines.append('|'+'|'.join(clean(x) for x in (e['thread'],e['title'],e['outcome'],e['reused'],encoded(e['details'])))+'|')
+        if session.get('prior_deferred'):
+            lines.extend(['','## 此前延后或分析待复核（未重调模型）'])
+            for e in session['prior_deferred']:
+                lines.append('- '+clean(e['thread'])+' '+clean(e['title'])+'：'+e['status'])
     text = '\n'.join(lines)
     (directory / '逐条报告.md').write_text(text, encoding='utf-8')
     reports = output_dir()
@@ -278,8 +296,14 @@ def apply_groups(sid, approval_path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='command', required=True)
+    p = sub.add_parser('discover')
+    p.add_argument('--recent', type=int)
     p = sub.add_parser('scan')
-    p.add_argument('--count', type=int, default=20)
+    scope = p.add_mutually_exclusive_group(required=True)
+    scope.add_argument('--count', type=int)
+    scope.add_argument('--all', action='store_true')
+    p.add_argument('--recent', type=int)
+    p.add_argument('--max-analysis', type=int)
     p.add_argument('--session-id')
     p = sub.add_parser('report')
     p.add_argument('--session-id', required=True)
@@ -297,8 +321,13 @@ def main():
             lock.write(b'0'); lock.flush()
         lock.seek(0)
         msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+        if args.command == 'discover':
+            from selection_workflow import discover, write_inventory
+            print(encoded(write_inventory(discover(args.recent))))
+            return
         if args.command == 'scan':
-            result = scan(args.count, args.session_id)
+            from selection_workflow import scan as scoped_scan
+            result = scoped_scan(args.count, args.session_id, args.all, args.recent, args.max_analysis)
         elif args.command == 'apply-titles':
             result = apply_titles(args.session_id, args.approval, session_path, outputs, save, DB)
         elif args.command == 'apply':
@@ -309,6 +338,8 @@ def main():
         print(encoded({'session': result['id'], 'state': result['state'],
                        'requested': result['requested'], 'selected': len(result['selected']),
                        'reported': len(rows(result)), 'report': result.get('report_path'),
+                       'selection_counts':result.get('selection_counts'),
+                       'selection_stop':result.get('selection_stop'),
                        'title_draft': result.get('title_draft'),
                        'grouping_draft': result.get('grouping_draft'),
                        'project_creation': result.get('project_creation'),

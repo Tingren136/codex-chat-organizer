@@ -114,7 +114,7 @@ def run(run_id, ids=None, limit=2, naming_only=True, proposed_groups=None, prepa
     if previous:
         cache.db.close()
         return {'skipped_existing_run': True, 'stored_report': json.loads(previous[0])}
-    report = {'run': run_id, 'model_calls': 0, 'screen_actions': 0, 'items': [], 'skipped': []}
+    report = {'run': run_id, 'model_calls': 0, 'screen_actions': 0, 'items': [], 'skipped': [], 'deferred': []}
     client = rpc = None
     try:
         if ids and all(i in excluded(cache) for i in ids):
@@ -144,9 +144,21 @@ def run(run_id, ids=None, limit=2, naming_only=True, proposed_groups=None, prepa
             if snap['meta']['name'] != thread['title'] or snap['meta']['cwd'] != thread.get('cwd'):
                 raise ValueError('Desktop/backend metadata conflict')
             # Bound first-pass spend; never truncate history into a false full view.
-            if len(encoded(snap['messages'])) > 100000:
-                raise ValueError('Sample exceeds 100000 characters; no model call made')
+            characters = len(encoded(snap['messages']))
+            if characters > 100000:
+                with cache.db:
+                    cache.db.execute('INSERT OR IGNORE INTO deferred_reads VALUES(?,?,?)',
+                                     (thread['id'], 'long_history', characters))
+                report['deferred'].append({'thread':thread['id'], 'title':thread['title'],
+                                          'reason':'long_history', 'characters':characters})
+                continue
+            if sum(len(encoded(s['messages'])) for s in snapshots.values()) + characters > 139900:
+                report['skipped'].append({'thread':thread['id'], 'reason':'batch_capacity_not_attempted'})
+                continue
             snapshots[thread['id']] = snap
+        if not snapshots:
+            persist(cache, report, 'completed')
+            return report
         if len(encoded([s['messages'] for s in snapshots.values()])) > 140000:
             raise ValueError('Batch exceeds initial spend cap')
         if cache.db.execute("SELECT 1 FROM snapshots WHERE state='pending'").fetchone():

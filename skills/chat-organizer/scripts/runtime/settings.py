@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 import subprocess
 
-VERSION = '0.3.0'
+VERSION = '0.4.1'
 
 
 def absolute(value):

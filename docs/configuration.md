@@ -1,4 +1,5 @@
 # 配置与隐私
+配置优先级：对应环境变量 > 私有配置文件 > 默认值。CODEX_HOME 未设置时取用户主目录下 .codex；默认数据目录为 CODEX_HOME/chat-organizer-data，默认报告为数据目录/reports。已有配置指定其他位置时，安装器和 doctor 沿用实际位置，不覆盖成默认值。
 在当前 CODEX_HOME 中建立私有文件 chat-organizer.local.json，例如：
 ```json
 {

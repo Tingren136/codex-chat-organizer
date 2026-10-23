@@ -14,4 +14,12 @@ jobs:
           $env:PYTHONPATH = "$pwd/skills/chat-organizer/scripts/runtime"
           python -m unittest discover -s tests -v
       - run: python tools/release_check.py
+      - name: Install and upgrade using Windows PowerShell
+        shell: pwsh
+        run: |
+          $target = Join-Path $env:RUNNER_TEMP 'organizer-install-test'
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -SourcePath . -CodexHome $target
+          if ($LASTEXITCODE -ne 0) { throw 'First installation failed' }
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -SourcePath . -CodexHome $target
+          if ($LASTEXITCODE -ne 0) { throw 'Upgrade failed' }
 

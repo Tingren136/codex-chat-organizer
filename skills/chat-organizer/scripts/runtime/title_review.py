@@ -11,7 +11,11 @@ from naming_policy import validate_title
 
 
 def items(session):
-    return [r for b in session['batches'] for r in b.get('result', {}).get('items', [])]
+    result = [r for b in session['batches'] for r in b.get('result', {}).get('items', [])]
+    if session.get('selection_mode') == 'rename_count':
+        result = [r for r in result if r.get('title_action') == 'rename' and r.get('suggested_title')
+                  and r['suggested_title'] != r.get('before_title')]
+    return result
 
 
 def title_digest(session, rows):

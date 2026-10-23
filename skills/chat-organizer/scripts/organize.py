@@ -12,7 +12,7 @@ sys.path.insert(0, str(RUNTIME))
 from settings import VERSION, data_root, codex_home, desktop_server, output_dir
 
 
-def doctor():
+def doctor(installation=False):
     root = data_root()
     result = {'version': VERSION, 'runtime': str(RUNTIME), 'data_dir': str(root),
               'output_dir': str(output_dir()), 'platform_supported': os.name == 'nt',
@@ -35,6 +35,18 @@ def doctor():
                 result[field] = connection.execute('SELECT count(*) FROM ' + table).fetchone()[0] if found else 0
         finally:
             connection.close()
+    result['python_supported'] = sys.version_info[:2] == (3, 14)
+    result['package_ok'] = all((RUNTIME / name).is_file() for name in
+                               ('settings.py', 'review_workflow.py', 'selection_workflow.py', 'project_admin.py'))
+    result['installation_ok'] = all(result[k] for k in
+                                    ('platform_supported', 'python_supported', 'package_ok'))
+    result['execution_environment_ready'] = result['installation_ok'] and all(result[k] for k in
+                    ('codex_cli_found', 'desktop_environment_supplied', 'official_server_found'))
+    result['authentication_checked'] = False
+    result['checks_missing'] = [k for k in ('platform_supported', 'python_supported', 'package_ok',
+        'codex_cli_found', 'desktop_environment_supplied', 'official_server_found') if not result[k]]
+    result['mode'] = 'installation' if installation else 'execution'
+    result['ok'] = result['installation_ok'] if installation else result['execution_environment_ready']
     print(json.dumps(result, ensure_ascii=False))
     return result
 
@@ -43,11 +55,12 @@ def main():
     if hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     args = sys.argv[1:]
-    if args == ['doctor']:
-        doctor(); return
+    if args in (['doctor'], ['doctor', '--installation']):
+        raise SystemExit(0 if doctor(installation='--installation' in args)['ok'] else 2)
     if not args or args == ['--help']:
         print('chat-organizer ' + VERSION + '\n'
-              'doctor | scan --count 20 | report --session-id ID | apply-titles --session-id ID --approval FILE | apply --session-id ID --approval FILE\n'
+              'doctor | discover [--recent N] | scan (--count N | --all) [--recent N] [--max-analysis N] [--session-id ID]\n'
+              'report --session-id ID | apply-titles --session-id ID --approval FILE | apply --session-id ID --approval FILE\n'
               'prepare-projects --session-id ID --approval FILE --roots FILE [--repair-confirmation TEXT]\n'
               'arm-repair --plan PATCH_PLAN | resume --plan PLAN | repair-status --plan PLAN\n'
               'Offline rollback: runtime/offline_registration.py rollback --plan PATCH_PLAN')
